@@ -1,7 +1,11 @@
 import streamlit as st
 import requests
+import os
 
-API_URL = 'http://127.0.0.1:8000'
+API_URL = os.getenv(
+    "BACKEND_URL",
+    "http://127.0.0.1:8000"
+).rstrip("/")
 st.set_page_config(page_title='Refund Recovery Agent', page_icon='💳', layout='wide')
 st.title('💳 Autonomous Refund & Chargeback Recovery Agent')
 st.caption('Evidence extraction • Deterministic TAT assessment • Human approval • Escalation')
