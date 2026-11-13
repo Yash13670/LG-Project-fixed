@@ -1,0 +1,21 @@
+# LangGraph workflow + SQLite checkpoints
+langgraph>=1.0,<2.0
+langgraph-checkpoint-sqlite>=3.0,<4.0
+
+# OpenRouter (OpenAI-compatible API)
+langchain-openai>=1.0,<2.0
+langchain-core>=1.0,<2.0
+
+# Validation / API / UI
+pydantic>=2.10,<3.0
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+python-multipart>=0.0.20
+streamlit>=1.40,<2.0
+requests>=2.32,<3.0
+
+# Environment / image handling / tests
+python-dotenv>=1.0,<2.0
+Pillow>=11.0,<13.0
+pytest>=8.0,<10.0
+httpx>=0.27,<1.0
