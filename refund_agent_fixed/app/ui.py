@@ -1,151 +1,468 @@
+import os
 import streamlit as st
 import requests
-import os
 
-API_URL = os.getenv(
-    "BACKEND_URL",
-    "http://127.0.0.1:8000"
-).rstrip("/")
-st.set_page_config(page_title='Refund Recovery Agent', page_icon='💳', layout='wide')
-st.title('💳 Autonomous Refund & Chargeback Recovery Agent')
-st.caption('Evidence extraction • Deterministic TAT assessment • Human approval • Escalation')
+st.set_page_config(
+    page_title="Autonomous Refund Agent",
+    page_icon="💳",
+    layout="wide"
+)
 
 try:
-    health = requests.get(f'{API_URL}/health', timeout=4)
-    if health.ok:
-        st.success('Backend connected • LangGraph enabled')
+    API_URL = st.secrets["BACKEND_URL"]
+except Exception:
+    API_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+
+API_URL = API_URL.rstrip("/")
+
+st.title("💳 Intelligent Refund & Escalation Agent")
+st.caption(
+    "UPI claim recovery • E-commerce refunds • Risk assessment "
+    "• Human review"
+)
+
+# --------------------------------------------------
+# BACKEND HEALTH
+# --------------------------------------------------
+try:
+    health = requests.get(f"{API_URL}/health", timeout=5)
+    if health.status_code == 200:
+        st.success("Backend connected")
     else:
-        st.error('Backend health check failed.')
+        st.error("Backend is not responding correctly")
 except requests.RequestException:
-    st.error('Backend offline. Start FastAPI in the first terminal.')
-    st.stop()
+    st.error("Backend is offline. Start FastAPI first.")
 
-menu = st.sidebar.radio('Navigation', ['New Claim', 'Case Review', 'All Cases', 'Escalate Case', 'Level 2 Support'])
+st.divider()
 
+menu = st.sidebar.radio(
+    "Navigation",
+    [
+        "UPI Refund Claim",
+        "E-commerce Refund",
+        "Approve / Reject",
+        "E-commerce Refund History",
+        "Escalate Case",
+        "Level 2 Support"
+    ]
+)
 
-def show_result(result: dict):
-    if not result:
-        return
-    st.subheader('Workflow assessment')
-    a, b, c = st.columns(3)
-    a.metric('Status', result.get('status', 'N/A'))
-    b.metric('Eligible for compensation', 'Yes' if result.get('eligible_for_compensation') else 'No / unconfirmed')
-    b.metric('Calculated compensation', f"₹{result.get('penalty_owed', 0) or 0}")
-    c.metric('Delay days', result.get('delay_days', 0) or 0)
-    st.write('**Extracted transaction details**')
-    st.json({k: result.get(k) for k in ['category', 'transaction_id', 'merchant_name', 'amount', 'transaction_date', 'upi_transaction_type', 'is_domestic']})
-    if result.get('missing_info_prompt'):
-        st.warning(result['missing_info_prompt'])
-    if result.get('rule_reason'):
-        st.info(result['rule_reason'])
-    if result.get('dispatch_error'):
-        st.warning(result['dispatch_error'])
-    if result.get('drafted_email'):
-        st.markdown('**Generated claim draft (not sent):**')
-        st.text_area('Draft email', result['drafted_email'], height=260)
+# --------------------------------------------------
+# 1. EXISTING UPI WORKFLOW
+# --------------------------------------------------
+if menu == "UPI Refund Claim":
 
+    st.header("Submit UPI Refund Claim")
+    st.caption("Existing UPI evidence and claim workflow")
 
-if menu == 'New Claim':
-    st.header('Submit transaction evidence')
-    category = st.selectbox('Claim category', ['upi_failed', 'ecommerce_return'], format_func=lambda x: 'Failed UPI transaction' if x == 'upi_failed' else 'E-commerce return')
-    file = st.file_uploader('Upload payment/order screenshot', type=['png', 'jpg', 'jpeg', 'webp'])
-    st.caption('Upload a clear screenshot. PDF files are not supported in this version.')
-    domestic = st.selectbox('Is this a domestic transaction?', ['unknown', 'yes', 'no'], format_func=lambda x: {'unknown': 'Not sure', 'yes': 'Yes', 'no': 'No'}[x])
-    customer_fault = st.selectbox('Was the failure caused by the customer?', ['unknown', 'no', 'yes'], format_func=lambda x: {'unknown': 'Not sure', 'no': 'No', 'yes': 'Yes'}[x])
-    st.caption('If either answer is unknown, the system will avoid asserting compensation eligibility and may require manual review.')
-    if st.button('Analyze claim', type='primary', disabled=file is None):
-        try:
-            with st.spinner('Running evidence extraction and LangGraph assessment...'):
-                response = requests.post(f'{API_URL}/start', data={'category': category, 'domestic_status': domestic, 'customer_fault': customer_fault}, files={'file': (file.name, file.getvalue(), file.type)}, timeout=180)
-            if response.ok:
-                data = response.json()
-                st.success('Case processed.')
-                st.write('**Thread ID**')
-                st.code(data['thread_id'])
-                show_result(data.get('result', {}))
-            else:
-                st.error(response.text)
-        except requests.RequestException as exc:
-            st.error(f'API error: {exc}')
+    uploaded_file = st.file_uploader(
+        "Upload transaction screenshot",
+        type=["png", "jpg", "jpeg", "webp"],
+        key="upi_upload"
+    )
 
-elif menu == 'Case Review':
-    st.header('Human approval / rejection')
-    thread_id = st.text_input('Refund Thread ID')
-    if st.button('Load case'):
-        try:
-            response = requests.get(f'{API_URL}/case/{thread_id.strip()}', timeout=15)
-            if response.ok:
-                data = response.json()
-                st.write('**Current status:**', data['status'])
-                st.write('**Approval:**', data['approval_status'])
-                show_result(data.get('result', {}))
-                st.session_state['review_case_id'] = thread_id.strip()
-                st.session_state['review_case_status'] = data['status']
-            else:
-                st.error(response.text)
-        except requests.RequestException as exc:
-            st.error(str(exc))
-    if st.session_state.get('review_case_id') == thread_id.strip() and st.session_state.get('review_case_status') == 'awaiting_approval':
-        st.warning('Approval will only run a local dispatch simulation. No real email is sent.')
-        left, right = st.columns(2)
-        with left:
-            if st.button('Approve and simulate dispatch', type='primary'):
-                response = requests.post(f'{API_URL}/approve', data={'thread_id': thread_id.strip(), 'approved': 'true'}, timeout=45)
-                if response.ok:
-                    st.success(response.json()['message'])
-                    show_result(response.json().get('result', {}))
-                else:
-                    st.error(response.text)
-        with right:
-            if st.button('Reject draft'):
-                response = requests.post(f'{API_URL}/approve', data={'thread_id': thread_id.strip(), 'approved': 'false'}, timeout=20)
-                if response.ok:
-                    st.info(response.json()['message'])
+    domestic = st.selectbox(
+        "Was this a domestic transaction?",
+        ["Unknown", "Yes", "No"]
+    )
+
+    customer_fault = st.selectbox(
+        "Was the failure caused by customer error?",
+        ["Unknown", "Yes", "No"]
+    )
+
+    if st.button("Submit UPI Claim", type="primary"):
+
+        if uploaded_file is None:
+            st.warning("Please upload transaction evidence.")
+        else:
+            try:
+                files = {
+                    "file": (
+                        uploaded_file.name,
+                        uploaded_file.getvalue(),
+                        uploaded_file.type
+                    )
+                }
+
+                data = {
+                    "category": "upi_failed",
+                    "domestic_status": domestic.lower(),
+                    "customer_fault": customer_fault.lower()
+                }
+
+                response = requests.post(
+                    f"{API_URL}/start",
+                    data=data,
+                    files=files,
+                    timeout=60
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    st.success("UPI claim submitted successfully")
+                    st.code(result.get("thread_id", ""))
+                    st.write("Status:", result.get("status"))
+                    st.json(result.get("result", result))
                 else:
                     st.error(response.text)
 
-elif menu == 'All Cases':
-    st.header('Case history')
-    if st.button('Refresh cases'):
-        response = requests.get(f'{API_URL}/cases', timeout=15)
-        if response.ok:
-            data = response.json()
-            st.metric('Total cases', data['total'])
-            if data['cases']:
-                st.dataframe(data['cases'], use_container_width=True, hide_index=True)
-            else:
-                st.info('No cases yet.')
-        else:
-            st.error(response.text)
+            except requests.RequestException as error:
+                st.error(f"API error: {error}")
 
-elif menu == 'Escalate Case':
-    st.header('Escalate to Level 2 support')
-    thread_id = st.text_input('Refund Thread ID')
-    reason = st.text_area('Escalation reason')
-    if st.button('Escalate', type='primary'):
-        response = requests.post(f'{API_URL}/escalate', data={'thread_id': thread_id.strip(), 'reason': reason.strip()}, timeout=15)
-        if response.ok:
-            st.success(response.json()['message'])
-        else:
-            st.error(response.text)
 
-elif menu == 'Level 2 Support':
-    st.header('Level 2 support dashboard')
-    if st.button('Refresh escalated cases'):
-        response = requests.get(f'{API_URL}/escalations', timeout=15)
-        if response.ok:
-            data = response.json()
-            st.metric('Total escalated cases', data['total_escalations'])
-            for case in data['cases']:
-                with st.expander(f"{case['thread_id']} • {case['category']}"):
-                    st.write('**Reason:**', case.get('escalation_reason'))
-                    st.write('**Status:**', case.get('status'))
-                    if st.button('Mark resolved', key=f"resolve_{case['thread_id']}"):
-                        result = requests.post(f"{API_URL}/resolve/{case['thread_id']}", timeout=15)
-                        if result.ok:
-                            st.success('Case resolved.')
-                            st.rerun()
+# --------------------------------------------------
+# 2. E-COMMERCE REFUND WORKFLOW
+# --------------------------------------------------
+elif menu == "E-commerce Refund":
+
+    st.header("🛒 E-commerce Refund Request")
+    st.caption(
+        "The agent verifies the order, checks return policy "
+        "and evaluates refund risk."
+    )
+
+    with st.form("ecommerce_refund_form"):
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            customer_id = st.text_input(
+                "Customer ID",
+                placeholder="Example: CUST-001"
+            )
+            order_id = st.text_input(
+                "Order ID",
+                placeholder="Example: ORD-1001"
+            )
+
+        with col2:
+            product_id = st.text_input(
+                "Product ID",
+                placeholder="Example: P200"
+            )
+            quantity = st.number_input(
+                "Quantity",
+                min_value=1,
+                max_value=100,
+                value=1
+            )
+
+        reason = st.selectbox(
+            "Refund Reason",
+            [
+                "damaged",
+                "missing_item",
+                "wrong_item",
+                "not_as_described",
+                "other"
+            ]
+        )
+
+        description = st.text_area(
+            "Describe the issue",
+            placeholder="Explain why you are requesting a refund..."
+        )
+
+        submitted = st.form_submit_button(
+            "Evaluate Refund Request",
+            type="primary"
+        )
+
+    if submitted:
+
+        if not all([
+            customer_id.strip(),
+            order_id.strip(),
+            product_id.strip()
+        ]):
+            st.warning("Please fill in Customer ID, Order ID and Product ID.")
+
+        else:
+            payload = {
+                "customer_id": customer_id.strip(),
+                "order_id": order_id.strip(),
+                "product_id": product_id.strip(),
+                "quantity": int(quantity),
+                "reason": reason,
+                "description": description.strip()
+            }
+
+            try:
+                response = requests.post(
+                    f"{API_URL}/ecommerce/start",
+                    json=payload,
+                    timeout=60
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+
+                    st.success("Refund request evaluated!")
+
+                    st.write("**Request ID:**")
+                    st.code(result.get("thread_id", ""))
+
+                    st.write(
+                        "**Status:**",
+                        result.get("status", "unknown")
+                    )
+
+                    st.json(result.get("result", result))
+
+                    if result.get("status") == "refunded":
+                        st.success("Mock refund executed successfully.")
+                    elif result.get("status") == "awaiting_approval":
+                        st.warning("This request requires human review.")
+                    elif result.get("status") == "rejected":
+                        st.error("This request was rejected by the policy checks.")
+
+                else:
+                    st.error(response.text)
+
+            except requests.RequestException as error:
+                st.error(f"API error: {error}")
+
+
+# --------------------------------------------------
+# 3. HUMAN APPROVAL / REJECTION
+# --------------------------------------------------
+elif menu == "Approve / Reject":
+
+    st.header("Human Review")
+
+    case_type = st.radio(
+        "Select case type",
+        ["E-commerce", "UPI"],
+        horizontal=True
+    )
+
+    thread_id = st.text_input("Enter Case / Thread ID")
+
+    if st.button("Fetch Case Details"):
+
+        if not thread_id.strip():
+            st.warning("Enter a valid case ID.")
+        else:
+            endpoint = (
+                f"/ecommerce/case/{thread_id.strip()}"
+                if case_type == "E-commerce"
+                else f"/case/{thread_id.strip()}"
+            )
+
+            try:
+                response = requests.get(
+                    f"{API_URL}{endpoint}",
+                    timeout=15
+                )
+
+                if response.status_code == 200:
+                    st.session_state["review_case"] = response.json()
+                    st.session_state["review_case_type"] = case_type
+                    st.session_state["review_thread_id"] = thread_id.strip()
+                else:
+                    st.error(response.text)
+
+            except requests.RequestException as error:
+                st.error(f"API error: {error}")
+
+    if "review_case" in st.session_state:
+        if (
+            st.session_state.get("review_case_type") == case_type
+            and st.session_state.get("review_thread_id") == thread_id.strip()
+        ):
+            st.subheader("Case Details")
+            st.json(st.session_state["review_case"])
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if st.button("Approve", type="primary"):
+                    try:
+                        if case_type == "E-commerce":
+                            response = requests.post(
+                                f"{API_URL}/ecommerce/approve",
+                                json={
+                                    "thread_id": thread_id.strip(),
+                                    "approved": True
+                                },
+                                timeout=60
+                            )
                         else:
-                            st.error(result.text)
+                            response = requests.post(
+                                f"{API_URL}/approve",
+                                data={
+                                    "thread_id": thread_id.strip(),
+                                    "approved": "true"
+                                },
+                                timeout=60
+                            )
+
+                        if response.status_code == 200:
+                            st.success("Approval processed.")
+                            st.json(response.json())
+                            st.session_state.pop("review_case", None)
+                        else:
+                            st.error(response.text)
+
+                    except requests.RequestException as error:
+                        st.error(f"API error: {error}")
+
+            with col2:
+                if st.button("Reject"):
+                    try:
+                        if case_type == "E-commerce":
+                            response = requests.post(
+                                f"{API_URL}/ecommerce/approve",
+                                json={
+                                    "thread_id": thread_id.strip(),
+                                    "approved": False
+                                },
+                                timeout=30
+                            )
+                        else:
+                            response = requests.post(
+                                f"{API_URL}/approve",
+                                data={
+                                    "thread_id": thread_id.strip(),
+                                    "approved": "false"
+                                },
+                                timeout=30
+                            )
+
+                        if response.status_code == 200:
+                            st.info("Case rejected.")
+                            st.json(response.json())
+                            st.session_state.pop("review_case", None)
+                        else:
+                            st.error(response.text)
+
+                    except requests.RequestException as error:
+                        st.error(f"API error: {error}")
+
+
+# --------------------------------------------------
+# 4. E-COMMERCE REFUND HISTORY
+# --------------------------------------------------
+elif menu == "E-commerce Refund History":
+
+    st.header("📜 E-commerce Refund History")
+
+    if st.button("Refresh Refund History", type="primary"):
+
+        try:
+            response = requests.get(
+                f"{API_URL}/ecommerce/refund-history",
+                timeout=15
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                st.json(data)
+            else:
+                st.error(response.text)
+
+        except requests.RequestException as error:
+            st.error(f"API error: {error}")
+
+
+# --------------------------------------------------
+# 5. EXISTING ESCALATION WORKFLOW
+# --------------------------------------------------
+elif menu == "Escalate Case":
+
+    st.header("Escalate Case to Level 2")
+
+    thread_id = st.text_input("Enter Case / Thread ID")
+
+    reason = st.text_area(
+        "Escalation Reason",
+        placeholder="Explain why this case needs Level 2 support..."
+    )
+
+    if st.button("Escalate Case", type="primary"):
+
+        if not thread_id.strip() or not reason.strip():
+            st.warning("Both fields are required.")
         else:
-            st.error(response.text)
+            try:
+                response = requests.post(
+                    f"{API_URL}/escalate",
+                    json={
+                        "thread_id": thread_id.strip(),
+                        "reason": reason.strip()
+                    },
+                    timeout=15
+                )
+
+                if response.status_code == 200:
+                    st.success("Case escalated successfully.")
+                    st.json(response.json())
+                else:
+                    st.error(response.text)
+
+            except requests.RequestException as error:
+                st.error(f"API error: {error}")
+
+
+# --------------------------------------------------
+# 6. EXISTING LEVEL 2 SUPPORT
+# --------------------------------------------------
+elif menu == "Level 2 Support":
+
+    st.header("🎧 Level 2 Support Dashboard")
+    st.caption("Review and resolve escalated cases")
+
+    if st.button("Refresh Escalated Cases", type="primary"):
+
+        try:
+            response = requests.get(
+                f"{API_URL}/escalations",
+                timeout=15
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+
+                st.metric(
+                    "Total Escalated Cases",
+                    data.get("total_escalations", 0)
+                )
+
+                for case in data.get("cases", []):
+
+                    with st.expander(
+                        f"Case: {case.get('thread_id', 'Unknown')}"
+                    ):
+                        st.write("Category:", case.get("category", "N/A"))
+                        st.write(
+                            "Reason:",
+                            case.get("escalation_reason", "N/A")
+                        )
+                        st.write("Status:", case.get("status", "N/A"))
+
+                        case_id = case.get("thread_id")
+
+                        if st.button(
+                            "Mark as Resolved",
+                            key=f"resolve_{case_id}"
+                        ):
+                            result = requests.post(
+                                f"{API_URL}/resolve/{case_id}",
+                                timeout=15
+                            )
+
+                            if result.status_code == 200:
+                                st.success("Case resolved.")
+                                st.rerun()
+                            else:
+                                st.error(result.text)
+
+                if not data.get("cases"):
+                    st.info("No escalated cases found.")
+
+            else:
+                st.error(response.text)
+
+        except requests.RequestException as error:
+            st.error(f"API error: {error}")

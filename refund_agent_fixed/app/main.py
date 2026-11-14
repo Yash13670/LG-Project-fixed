@@ -152,3 +152,8 @@ def resolve_case(thread_id: str):
         raise HTTPException(status_code=400, detail='Only escalated cases can be resolved.')
     update_case(thread_id, {'status': 'resolved'})
     return {'message': 'Case resolved successfully.', 'thread_id': thread_id, 'status': 'resolved'}
+
+
+# E-commerce autonomous refund routes (shares the existing SQLite database)
+from app.ecommerce.api import router as ecommerce_router
+app.include_router(ecommerce_router)
